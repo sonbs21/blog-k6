@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(ls *)",
+      "Bash(find . *)",
+      "Bash(grep *)",
+      "Bash(cat *)",
+      "Bash(mkdir -p *)",
+      "Bash(mv *)",
+      "Bash(cp *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(terraform fmt *)",
+      "Bash(terraform validate)",
+      "Bash(terraform plan *)",
+      "Bash(terraform init)",
+      "Bash(uv run *)",
+      "Bash(uv add *)",
+      "Bash(uv sync)",
+      "Bash(python *)",
+      "Bash(alembic *)"
+    ],
+    "deny": [
+      "Bash(terraform apply *)",
+      "Bash(terraform destroy *)",
+      "Bash(aws s3 rm *)",
+      "Bash(aws cloudfront *)",
+      "Bash(git push *)",
+      "Bash(rm -rf *)"
+    ]
+  }
+}

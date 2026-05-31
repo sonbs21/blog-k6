@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light mode tokens */
+    --background: 0 0% 100%;
+    --foreground: 240 10% 3.9%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 239 84% 67%;         /* indigo-500 */
+    --accent-foreground: 0 0% 98%;
+    --border: 240 5.9% 90%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 10% 3.9%;
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 239 84% 67%;
+    --accent-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --card: 240 4% 6%;
+    --card-foreground: 0 0% 98%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+  }
+
+  ::selection {
+    background: hsl(var(--accent) / 0.15);
+    color: hsl(var(--foreground));
+  }
+
+  /* Highlight.js — transparent background so Tailwind Typography handles it */
+  .hljs {
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  /* Light mode syntax colors */
+  .hljs-comment, .hljs-quote { color: #6e7781; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-deletion { color: #cf222e; }
+  .hljs-string, .hljs-attr, .hljs-addition { color: #0a3069; }
+  .hljs-literal, .hljs-number, .hljs-variable { color: #953800; }
+  .hljs-title, .hljs-section, .hljs-selector-class { color: #8250df; }
+  .hljs-built_in, .hljs-type { color: #0550ae; }
+  .hljs-meta { color: #6e7781; }
+
+  /* Dark mode syntax colors */
+  .dark .hljs-comment, .dark .hljs-quote { color: #8b949e; }
+  .dark .hljs-keyword, .dark .hljs-selector-tag, .dark .hljs-deletion { color: #ff7b72; }
+  .dark .hljs-string, .dark .hljs-attr, .dark .hljs-addition { color: #a5d6ff; }
+  .dark .hljs-literal, .dark .hljs-number, .dark .hljs-variable { color: #ffa657; }
+  .dark .hljs-title, .dark .hljs-section, .dark .hljs-selector-class { color: #d2a8ff; }
+  .dark .hljs-built_in, .dark .hljs-type { color: #79c0ff; }
+  .dark .hljs-meta { color: #8b949e; }
+}
+
+@layer components {
+  .site-container {
+    @apply mx-auto w-full max-w-5xl px-5 sm:px-6 lg:px-8;
+  }
+
+  .prose-container {
+    @apply mx-auto w-full max-w-2xl;
+  }
+
+  .container-editorial {
+    @apply mx-auto w-full max-w-6xl px-5 sm:px-6 lg:px-8;
+  }
+
+  .tag-pill {
+    @apply inline-flex items-center rounded-full bg-stone-100 px-2.5 py-0.5 text-xs font-medium text-stone-600 hover:bg-stone-200 transition-colors dark:bg-stone-800 dark:text-stone-300 dark:hover:bg-stone-700;
+  }
+
+  .tag-pill-forest {
+    @apply inline-flex items-center rounded-full bg-forest-50 px-2.5 py-0.5 text-xs font-medium text-forest-700 hover:bg-forest-100 transition-colors dark:bg-forest-900/30 dark:text-forest-300 dark:hover:bg-forest-900/50;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
