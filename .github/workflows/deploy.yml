@@ -1,0 +1,224 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-southeast-1
+  BACKEND_ASG: blog-prod-backend-asg
+  FRONTEND_TAG: blog-prod-frontend-*
+
+jobs:
+  # ─── Backend ───────────────────────────────────────────────────────────────
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Push secrets into SSM Parameter Store (SecureString = KMS-encrypted)
+      - name: Sync secrets to SSM Parameter Store
+        run: |
+          ssm_put() {
+            aws ssm put-parameter --overwrite \
+              --name "/blog-prod/backend/$1" --type "$2" --value "$3"
+          }
+          ssm_put github_repo_url   String       "${{ secrets.GITHUB_REPO_URL }}"
+          ssm_put DATABASE_URL      SecureString "${{ secrets.BACKEND_DATABASE_URL }}"
+          ssm_put SECRET_KEY        SecureString "${{ secrets.BACKEND_SECRET_KEY }}"
+          ssm_put AWS_S3_BUCKET     String       "${{ secrets.BACKEND_AWS_S3_BUCKET }}"
+          ssm_put ALLOWED_ORIGINS   String       "${{ secrets.BACKEND_ALLOWED_ORIGINS }}"
+
+      - name: Get healthy backend instance IDs
+        id: instances
+        run: |
+          IDS=$(aws autoscaling describe-auto-scaling-groups \
+            --auto-scaling-group-names "${{ env.BACKEND_ASG }}" \
+            --query 'AutoScalingGroups[0].Instances[?HealthStatus==`Healthy`].InstanceId' \
+            --output text | tr '\t' ' ')
+          [[ -n "$IDS" ]] || { echo "::error::No healthy backend instances"; exit 1; }
+          echo "ids=$IDS" >> $GITHUB_OUTPUT
+          echo "Instances: $IDS"
+
+      - name: Deploy to each backend instance
+        run: |
+          deploy_instance() {
+            local INSTANCE_ID="$1"
+
+            # Build SSM send-command JSON
+            python3 - "$INSTANCE_ID" << 'PYEOF' > /tmp/ssm-backend.json
+          import json, sys
+          instance = sys.argv[1]
+          doc = {
+              "InstanceIds": [instance],
+              "DocumentName": "AWS-RunShellScript",
+              "TimeoutSeconds": 600,
+              "Parameters": {
+                  "commands": [
+                      "set -e",
+                      "export AWS_DEFAULT_REGION=ap-southeast-1",
+                      "REPO_URL=$(aws ssm get-parameter --name /blog-prod/backend/github_repo_url --query Value --output text)",
+                      "[ -d /home/appuser/app/.git ] || sudo -u appuser git clone \"$REPO_URL\" /home/appuser/app",
+                      "sudo -u appuser git -C /home/appuser/app pull origin main",
+                      "bash /home/appuser/app/.github/scripts/backend-deploy.sh",
+                  ]
+              },
+          }
+          print(json.dumps(doc))
+          PYEOF
+
+            # Send command
+            COMMAND_ID=$(aws ssm send-command \
+              --cli-input-json "$(cat /tmp/ssm-backend.json)" \
+              --query 'Command.CommandId' --output text)
+            echo "  → $INSTANCE_ID | command: $COMMAND_ID"
+
+            # Wait (up to 10 min via built-in waiter)
+            aws ssm wait command-executed \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID"
+
+            # Check result
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query 'Status' --output text)
+
+            if [[ "$STATUS" != "Success" ]]; then
+              echo "::error::Deploy failed on $INSTANCE_ID (status=$STATUS)"
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardErrorContent' --output text
+              return 1
+            fi
+            echo "  ✓ $INSTANCE_ID"
+          }
+
+          FAILED=0
+          for ID in ${{ steps.instances.outputs.ids }}; do
+            deploy_instance "$ID" || FAILED=1
+          done
+          exit $FAILED
+
+      - name: Verify ALB health checks
+        run: |
+          TG_ARN=$(aws elbv2 describe-target-groups \
+            --names "blog-prod-backend-tg" \
+            --query 'TargetGroups[0].TargetGroupArn' --output text)
+
+          for i in $(seq 1 24); do
+            UNHEALTHY=$(aws elbv2 describe-target-health \
+              --target-group-arn "$TG_ARN" \
+              --query 'TargetHealthDescriptions[?TargetHealth.State!=`healthy`]' \
+              --output json)
+            [[ "$UNHEALTHY" == "[]" ]] && echo "All backend targets healthy ✓" && exit 0
+            echo "Waiting for targets... ($i/24)"
+            sleep 10
+          done
+          echo "::error::Backend targets not healthy after 4 minutes"
+          exit 1
+
+  # ─── Frontend ──────────────────────────────────────────────────────────────
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get frontend instance IDs
+        id: instances
+        run: |
+          IDS=$(aws ec2 describe-instances \
+            --filters \
+              "Name=tag:Name,Values=${{ env.FRONTEND_TAG }}" \
+              "Name=instance-state-name,Values=running" \
+            --query 'Reservations[*].Instances[*].InstanceId' \
+            --output text | tr '\t\n' ' ')
+          [[ -n "$IDS" ]] || { echo "::error::No running frontend instances"; exit 1; }
+          echo "ids=$IDS" >> $GITHUB_OUTPUT
+          echo "Instances: $IDS"
+
+      - name: Deploy to each frontend instance
+        run: |
+          API_URL="${{ secrets.NEXT_PUBLIC_API_URL }}"
+          SITE_URL="${{ secrets.NEXT_PUBLIC_SITE_URL }}"
+
+          deploy_instance() {
+            local INSTANCE_ID="$1"
+
+            python3 - "$INSTANCE_ID" "$API_URL" "$SITE_URL" << 'PYEOF' > /tmp/ssm-frontend.json
+          import json, sys
+          instance, api_url, site_url = sys.argv[1], sys.argv[2], sys.argv[3]
+          doc = {
+              "InstanceIds": [instance],
+              "DocumentName": "AWS-RunShellScript",
+              "TimeoutSeconds": 1200,
+              "Parameters": {
+                  "commands": [
+                      "set -e",
+                      "export AWS_DEFAULT_REGION=ap-southeast-1",
+                      f"export NEXT_PUBLIC_API_URL='{api_url}'",
+                      f"export NEXT_PUBLIC_SITE_URL='{site_url}'",
+                      "REPO_URL=$(aws ssm get-parameter --name /blog-prod/backend/github_repo_url --query Value --output text)",
+                      "[ -d /home/appuser/app/.git ] || sudo -u appuser git clone \"$REPO_URL\" /home/appuser/app",
+                      "sudo -u appuser git -C /home/appuser/app pull origin main",
+                      "bash /home/appuser/app/.github/scripts/frontend-deploy.sh",
+                  ]
+              },
+          }
+          print(json.dumps(doc))
+          PYEOF
+
+            COMMAND_ID=$(aws ssm send-command \
+              --cli-input-json "$(cat /tmp/ssm-frontend.json)" \
+              --query 'Command.CommandId' --output text)
+            echo "  → $INSTANCE_ID | command: $COMMAND_ID"
+
+            aws ssm wait command-executed \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID"
+
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query 'Status' --output text)
+
+            if [[ "$STATUS" != "Success" ]]; then
+              echo "::error::Deploy failed on $INSTANCE_ID (status=$STATUS)"
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --query 'StandardErrorContent' --output text
+              return 1
+            fi
+            echo "  ✓ $INSTANCE_ID"
+          }
+
+          FAILED=0
+          for ID in ${{ steps.instances.outputs.ids }}; do
+            deploy_instance "$ID" || FAILED=1
+          done
+          exit $FAILED
